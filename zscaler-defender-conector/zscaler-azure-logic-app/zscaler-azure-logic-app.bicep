@@ -112,7 +112,7 @@ resource eventHubConnection 'Microsoft.Web/connections@2016-06-01' = {
       name: 'managedIdentityAuth'
       values: { 
         namespaceEndpoint: {
-          value: eventHubNamespace.properties.serviceBusEndpoint
+          value: 'sb://${eventHubNamespace.name}.servicebus.windows.net/'
         }
       }
     }
@@ -314,11 +314,6 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
             ]
           }
           type: 'Http'
-          retryPolicy: {
-            type: 'fixed'
-            count: 3
-            interval: 'PT30S'
-          }
           inputs: {
             uri: '@{parameters(\'DEFENDER-BASE-URL\')}/oauth2/v2.0/token'
             method: 'POST'
@@ -326,6 +321,11 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
               'Content-Type': 'application/x-www-form-urlencoded'
             }
             body: 'grant_type=client_credentials&\nclient_id=@{body(\'Get_Client_Id\')?[\'value\']}&\nclient_secret=@{body(\'Get_Client_Secret\')?[\'value\']}&\nscope=@{parameters(\'SCOPE-API\')}'
+            retryPolicy: {
+              type: 'fixed'
+              count: 3
+              interval: 'PT30S'
+            }
           }
         }
         Get_Machines: {
@@ -335,16 +335,16 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
             ]
           }
           type: 'Http'
-          retryPolicy: {
-            type: 'fixed'
-            count: 3
-            interval: 'PT30S'
-          }
           inputs: {
             uri: '@parameters(\'MACHINES-API-ENDPOINT\')'
             method: 'GET'
             headers: {
               Authorization: 'Bearer @{body(\'Get_Oauth_Token\')?[\'access_token\']}'
+            }
+            retryPolicy: {
+              type: 'fixed'
+              count: 3
+              interval: 'PT30S'
             }
           }
         }
