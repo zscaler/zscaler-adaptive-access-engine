@@ -175,7 +175,7 @@ resource eventHubNetworkRuleSet 'Microsoft.EventHub/namespaces/networkrulesets@2
   name: 'default'
   properties: {
     publicNetworkAccess: 'Enabled' // Keep enabled to allow trusted service access and IP/VNet rules.
-    defaultAction: 'Allow' 
+    defaultAction: 'Allow' // Consumption-based Logic App service is not in the list of trusted Microsoft services that can access a network-restricted event hub.
     virtualNetworkRules: !empty(allowedVnetSubnetId) ? [
       {
         subnet: {
