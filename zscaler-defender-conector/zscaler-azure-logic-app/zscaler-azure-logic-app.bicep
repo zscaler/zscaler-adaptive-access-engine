@@ -175,7 +175,7 @@ resource eventHubNetworkRuleSet 'Microsoft.EventHub/namespaces/networkrulesets@2
   name: 'default'
   properties: {
     publicNetworkAccess: 'Enabled' // Keep enabled to allow trusted service access and IP/VNet rules.
-    defaultAction: 'Deny' // Secure by default: Deny traffic.
+    defaultAction: 'Allow' 
     virtualNetworkRules: !empty(allowedVnetSubnetId) ? [
       {
         subnet: {
