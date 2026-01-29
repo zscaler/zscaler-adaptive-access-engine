@@ -1,6 +1,6 @@
 @description('The base name for all resources. Should be unique.')
 @minLength(3)
-param baseName string = 'zaa-001'
+param baseName string = 'zaa-consumption-001'
 
 @description('The location for the resources. Defaults to the resource group location.')
 param location string = resourceGroup().location
@@ -18,6 +18,9 @@ param logicAppTriggerInterval int = 15
   'Day'
 ])
 param logicAppTriggerFrequency string = 'Minute'
+
+@description('The delay in seconds between paginated API calls. Defaults to 5.')
+param logicAppApiDelaySeconds int = 5
 
 @secure()
 @description('The Client ID for the Defender Tenant.')
@@ -243,7 +246,7 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
       contentVersion: '1.0.0.0'
       parameters: {
         'DEFENDER-BASE-URL': {
-          defaultValue: 'https://login.microsoftonline.com/${defenderTenantId}'
+          defaultValue: '${environment().authentication.loginEndpoint}/${defenderTenantId}'
           type: 'String'
         }
         'SCOPE-API': {
@@ -258,13 +261,17 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
           defaultValue: {}
           type: 'Object'
         }
-        'logicAppTriggerInterval': {
+        logicAppTriggerInterval: {
           type: 'Int'
           defaultValue: 15
         }
-        'logicAppTriggerFrequency': {
+        logicAppTriggerFrequency: {
           type: 'String'
           defaultValue: 'Minute'
+        }
+        logicAppApiDelaySeconds: {
+          type: 'Int'
+          defaultValue: 5
         }
       }
       triggers: {
@@ -289,6 +296,14 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
             method: 'get'
             path: '/secrets/@{encodeURIComponent(\'DEFENDER-CLIENT-ID\')}/value'
           }
+          runtimeConfiguration: {
+            secureData: {
+              properties: [
+                'inputs'
+                'outputs'
+              ]
+            }
+          }
         }
         Get_Client_Secret: {
           runAfter: {
@@ -305,6 +320,14 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
             }
             method: 'get'
             path: '/secrets/@{encodeURIComponent(\'DEFENDER-CLIENT-SECRET\')}/value'
+          }
+          runtimeConfiguration: {
+            secureData: {
+              properties: [
+                'inputs'
+                'outputs'
+              ]
+            }
           }
         }
         Get_Oauth_Token: {
@@ -327,45 +350,145 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
               interval: 'PT30S'
             }
           }
+          runtimeConfiguration: {
+            contentTransfer: {
+              transferMode: 'Chunked'
+            }
+            secureData: {
+              properties: [
+                'inputs'
+                'outputs'
+              ]
+            }
+          }
         }
-        Get_Machines: {
+        Initialize_Next_Link: {
           runAfter: {
             Get_Oauth_Token: [
               'Succeeded'
             ]
           }
-          type: 'Http'
+          type: 'InitializeVariable'
           inputs: {
-            uri: '@parameters(\'MACHINES-API-ENDPOINT\')'
-            method: 'GET'
-            headers: {
-              Authorization: 'Bearer @{body(\'Get_Oauth_Token\')?[\'access_token\']}'
-            }
-            retryPolicy: {
-              type: 'fixed'
-              count: 3
-              interval: 'PT30S'
-            }
+            variables: [
+              {
+                name: 'nextLink'
+                type: 'string'
+                value: '@{parameters(\'MACHINES-API-ENDPOINT\')}?$select=id,riskScore,healthStatus,exposureLevel,healthStatus,lastSeen,firstSeen,rbacGroupName,rbacGroupId,machineTags,osPlatform'
+              }
+            ]
           }
         }
-        Send_event: {
+        Do_until_there_are_no_more_machines: {
           runAfter: {
-            Get_Machines: [
+            Initialize_Next_Link: [
               'Succeeded'
             ]
           }
-          type: 'ApiConnection'
-          inputs: {
-            host: {
-              connection: {
-                name: '@parameters(\'$connections\')[\'eventhubs\'][\'connectionId\']'
+          type: 'Until'
+          expression: '@empty(variables(\'nextLink\'))'
+          limit: {
+            count: 5000
+            timeout: 'PT1H'
+          }
+          actions: {
+            Get_Machines: {
+              runAfter: {}
+              type: 'Http'
+              inputs: {
+                uri: '@variables(\'nextLink\')'
+                method: 'GET'
+                headers: {
+                  Authorization: 'Bearer @{body(\'Get_Oauth_Token\')?[\'access_token\']}'
+                }
+                retryPolicy: {
+                  type: 'fixed'
+                  count: 3
+                  interval: 'PT30S'
+                }
+              }
+              runtimeConfiguration: {
+                contentTransfer: {
+                  transferMode: 'Chunked'
+                }
+                secureData: {
+                  properties: [
+                    'inputs'
+                  ]
+                }
               }
             }
-            method: 'post'
-            body: {
-              ContentData: '@base64(string(body(\'Get_Machines\')))'
+            For_each_machine: {
+              runAfter: {
+                Get_Machines: [
+                  'Succeeded'
+                ]
+              }
+              type: 'foreach'
+              foreach: '@body(\'Get_Machines\')?[\'value\']'
+              actions: {
+                Compose_Payload: {
+                  runAfter: {}
+                  type: 'Compose'
+                  inputs: {
+                    value: [
+                      '@item()'
+                    ]
+                  }
+                }
+                Send_event: {
+                  runAfter: {
+                    Compose_Payload: [
+                      'Succeeded'
+                    ]
+                  }
+                  type: 'ApiConnection'
+                  inputs: {
+                    host: {
+                      connection: {
+                        name: '@parameters(\'$connections\')[\'eventhubs\'][\'connectionId\']'
+                      }
+                    }
+                    method: 'post'
+                    body: {
+                      ContentData: '@base64(string(outputs(\'Compose_Payload\')))'
+                    }
+                path: '/@{encodeURIComponent(\'${eventHubName}\')}/events'
+                    retryPolicy: {
+                      type: 'fixed'
+                      count: 3
+                      interval: 'PT30S'
+                    }
+                  }
+                }
+              }
             }
-            path: '/@{encodeURIComponent(\'${eventHubName}\')}/events'
+            Set_Next_Link: {
+              runAfter: {
+                For_each_machine: [
+                  'Succeeded'
+                ]
+              }
+              type: 'SetVariable'
+              inputs: {
+                name: 'nextLink'
+                value: '@body(\'Get_Machines\')?[\'@odata.nextLink\']'
+              }
+            }
+            Delay_before_next_page: {
+              runAfter: {
+                Set_Next_Link: [
+                  'Succeeded'
+                ]
+              }
+              type: 'Wait'
+              inputs: {
+                interval: {
+                  count: '@parameters(\'logicAppApiDelaySeconds\')'
+                  unit: 'Second'
+                }
+              }
+            }
           }
         }
       }
@@ -377,6 +500,9 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
       }
       logicAppTriggerFrequency: {
         value: logicAppTriggerFrequency
+      }
+      logicAppApiDelaySeconds: {
+        value: logicAppApiDelaySeconds
       }
       '$connections': {
         value: {
