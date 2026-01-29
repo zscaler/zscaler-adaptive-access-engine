@@ -16,4 +16,4 @@ The entire infrastructure is defined as an Azure Bicep template.
 - Publishes data to a secure Azure Event Hub.
 - The trigger frequency is configurable.
 
-For detailed information on architecture, deployment, and configuration, please see the [Zscaler & Microsoft Defender Integration Connector README](./zscaler-defender-conector/README.md).
+For detailed information on architecture, deployment, and configuration, please see the [Zscaler & Microsoft Defender Integration Connector README](./zscaler-defender-connector/README.md).
